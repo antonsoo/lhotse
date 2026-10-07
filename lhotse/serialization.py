@@ -658,8 +658,10 @@ def deserialize_item(data: dict) -> Any:
     # and returns a Lhotse manifest object rather than a raw dict.
     from lhotse import Features, Image, MonoCut, MultiCut, Recording, SupervisionSegment
     from lhotse.array import deserialize_array
-    from lhotse.cut import MixedCut
+    from lhotse.cut import MixedCut, PaddingCut
 
+    if data.get("type") == "PaddingCut":
+        return PaddingCut.from_dict(data)
     if "width" in data:
         return Image.from_dict(data)
     if "shape" in data or "array" in data:

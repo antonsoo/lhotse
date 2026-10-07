@@ -72,6 +72,27 @@ def test_load_any_lhotse_manifest_lazy(path, exception_expectation):
             assert list(me) == list(ml)  # equal under iteration
 
 
+@pytest.mark.parametrize("extension", ["jsonl", "jsonl.gz"])
+@pytest.mark.parametrize("has_features", [False, True])
+@pytest.mark.parametrize("padding_first", [False, True])
+def test_padding_cut_jsonl_roundtrip(tmp_path, extension, has_features, padding_first):
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1)[0]
+    if not has_features:
+        speech = speech.drop_features()
+    _, padding = speech.mix(speech, tag="noise").unmix(tag="absent")
+    cuts = CutSet.from_cuts([padding, speech] if padding_first else [speech, padding])
+    path = tmp_path / f"cuts.{extension}"
+    cuts.to_file(path)
+
+    assert list(CutSet.from_jsonl(path)) == list(cuts)
+    for load in (load_manifest_lazy, CutSet.from_file, CutSet.from_jsonl_lazy):
+        assert list(load(path)) == list(cuts)
+    if extension == "jsonl":
+        indexed = CutSet.from_file(path, indexed=True)
+        assert indexed.is_indexed
+        assert list(indexed) == list(cuts)
+
+
 @pytest.fixture
 def recording_set():
     return RecordingSet.from_recordings(
