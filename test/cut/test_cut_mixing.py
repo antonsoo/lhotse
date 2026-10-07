@@ -5,6 +5,7 @@ import pytest
 
 from lhotse.audio import Recording
 from lhotse.cut import CutSet, MixedCut, MonoCut, MultiCut
+from lhotse.features.io import MemoryRawWriter
 from lhotse.serialization import deserialize_item
 from lhotse.supervision import SupervisionSegment
 from lhotse.testing.dummies import (
@@ -12,6 +13,7 @@ from lhotse.testing.dummies import (
     dummy_multi_cut,
     remove_spaces_from_segment_text,
 )
+from lhotse.utils import fastcopy
 from lhotse.utils import nullcontext as does_not_raise
 
 # Note:
@@ -165,6 +167,37 @@ def test_mixed_cut_load_features_unmixed(mixed_feature_cut):
     feats = mixed_feature_cut.load_features(mixed=False)
     assert feats.shape[0] == 2
     assert feats.shape[1] == 1360
+
+
+@pytest.mark.parametrize("num_channels", [1, 2, 3])
+@pytest.mark.parametrize("direction", ["left", "right", "both"])
+@pytest.mark.parametrize("mixed", [True, False])
+@pytest.mark.parametrize("mix_another_cut", [True, False])
+def test_pad_multichannel_features(num_channels, direction, mixed, mix_another_cut):
+    cut = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    cut = cut.truncate(duration=0.6)
+    original = cut.load_features()
+    channels = [original + channel for channel in range(num_channels)]
+
+    def load_padded(features):
+        stored = fastcopy(
+            cut,
+            features=fastcopy(
+                cut.features,
+                storage_type=MemoryRawWriter.name,
+                storage_path="",
+                storage_key=MemoryRawWriter().write("features", features),
+            ),
+        )
+        if mix_another_cut:
+            stored = stored.mix(stored.truncate(duration=0.2), offset_other_by=0.2)
+        return stored.pad(duration=1.0, direction=direction).load_features(mixed=mixed)
+
+    # Padding should behave like independent padding of each channel, including
+    # when a singleton channel axis is explicitly stored in a 3D array.
+    expected = np.stack([load_padded(channel) for channel in channels], axis=-1)
+    actual = load_padded(np.stack(channels, axis=-1))
+    np.testing.assert_allclose(actual, expected)
 
 
 def test_mixed_cut_map_supervisions(mixed_feature_cut):

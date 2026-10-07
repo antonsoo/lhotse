@@ -1246,6 +1246,10 @@ class MixedCut(Cut):
 
         # First, we have to make sure that the reference energy levels are appropriate.
         # They might not be if the first track is a padding track.
+        # Padding has no channel dimension: infer it from an audible source,
+        # which may differ from a muted SNR reference.
+        first_non_padding_track = self.first_non_padding_track
+        first_non_padding_feats = first_non_padding_track.cut.load_features()
         reference_feats = None
         reference_energy = None
         _, reference_track = _get_snr_reference_track(self)
@@ -1253,11 +1257,24 @@ class MixedCut(Cut):
             reference_track.cut.features_type
         )
         if reference_track is not first_track:
-            reference_feats = reference_track.cut.load_features()
+            reference_feats = (
+                first_non_padding_feats
+                if reference_track is first_non_padding_track
+                else reference_track.cut.load_features()
+            )
             reference_energy = feature_extractor.compute_energy(reference_feats)
 
         # The mix itself.
-        first_cut_feats = first_cut.load_features()
+        first_cut_feats = (
+            first_non_padding_feats
+            if first_track is first_non_padding_track
+            else first_cut.load_features()
+        )
+        if isinstance(first_cut, PaddingCut) and first_non_padding_feats.ndim == 3:
+            first_cut_feats = np.broadcast_to(
+                first_cut_feats[..., None],
+                (*first_cut_feats.shape, first_non_padding_feats.shape[-1]),
+            )
         first_cut_feats = _scale_features_for_snr(
             first_cut_feats,
             feature_extractor=feature_extractor,
@@ -1271,10 +1288,16 @@ class MixedCut(Cut):
             reference_energy=reference_energy,
         )
         for track in tracks[1:]:
-            if track is reference_track and reference_feats is not None:
+            if track is first_non_padding_track:
+                feats = first_non_padding_feats
+            elif track is reference_track and reference_feats is not None:
                 feats = reference_feats  # manual caching to avoid duplicated I/O
             else:
                 feats = track.cut.load_features()
+            if isinstance(track.cut, PaddingCut) and first_cut_feats.ndim == 3:
+                feats = np.broadcast_to(
+                    feats[..., None], (*feats.shape, first_cut_feats.shape[-1])
+                )
             mixer.add_to_mix(
                 feats=feats,
                 snr=track.snr,
