@@ -5,6 +5,7 @@ import pytest
 
 from lhotse.audio import Recording
 from lhotse.cut import CutSet, MixedCut, MonoCut, MultiCut
+from lhotse.features import Fbank
 from lhotse.serialization import deserialize_item
 from lhotse.supervision import SupervisionSegment
 from lhotse.testing.dummies import (
@@ -165,6 +166,14 @@ def test_mixed_cut_load_features_unmixed(mixed_feature_cut):
     feats = mixed_feature_cut.load_features(mixed=False)
     assert feats.shape[0] == 2
     assert feats.shape[1] == 1360
+    assert feats.dtype == np.float32
+    snr = 10 * np.log10(Fbank.compute_energy(feats[0]) / Fbank.compute_energy(feats[1]))
+    assert snr == pytest.approx(mixed_feature_cut.tracks[1].snr)
+    np.testing.assert_allclose(
+        Fbank.mix(feats[0], feats[1], 1.0),
+        mixed_feature_cut.load_features(),
+        atol=1e-5,
+    )
 
 
 def test_mixed_cut_map_supervisions(mixed_feature_cut):

@@ -17,6 +17,7 @@ from lhotse.features import (
     FeatureSet,
     FeatureSetBuilder,
     Mfcc,
+    Spectrogram,
     TorchaudioSpectrogram,
     TorchaudioSpectrogramConfig,
 )
@@ -295,6 +296,53 @@ def test_feature_mixer_handles_empty_array():
 
     fmix_feat = mixer.mixed_feats
     np.testing.assert_equal(fmix_feat, f1)
+
+
+@pytest.mark.parametrize("feature_extractor", [Fbank(), Spectrogram()])
+@pytest.mark.parametrize("snr", [None, -10.0, 0.0, 10.0])
+def test_feature_mixer_unmixed_snr(feature_extractor, snr):
+    log_space = isinstance(feature_extractor, Fbank)
+    base = np.full((3, 2), 4.0, dtype=np.float32)
+    added = np.full((2, 2), 3.0, dtype=np.float32)
+    unscaled = np.full((1, 2), 5.0, dtype=np.float32)
+    if log_space:
+        base, added, unscaled = np.log(base), np.log(added), np.log(unscaled)
+    original = [feats.copy() for feats in (base, added, unscaled)]
+
+    mixer = FeatureMixer(
+        feature_extractor=feature_extractor,
+        base_feats=base,
+        frame_shift=0.01,
+        padding_value=-1000.0 if log_space else 0.0,
+    )
+    mixer.add_to_mix(added, sampling_rate=16000, snr=snr, offset=0.01)
+    # Extending the mix also pads the track that has an SNR adjustment.
+    mixer.add_to_mix(unscaled, sampling_rate=16000, offset=0.04)
+    mixed = mixer.mixed_feats.copy()
+    unmixed = mixer.unmixed_feats
+    assert unmixed.shape == (3, 5, 2)
+    assert unmixed.dtype == base.dtype
+
+    expected_energy = (
+        feature_extractor.compute_energy(added)
+        if snr is None
+        else feature_extractor.compute_energy(base) * 10 ** (-snr / 10)
+    )
+    assert feature_extractor.compute_energy(unmixed[1]) == pytest.approx(
+        expected_energy
+    )
+    np.testing.assert_array_equal(unmixed[0, :3], base)
+    np.testing.assert_array_equal(unmixed[2, 4:], unscaled)
+
+    # The returned tracks must reconstruct the same mixture in the energy domain.
+    energies = np.exp(unmixed) if log_space else unmixed
+    mixed_energy = np.exp(mixed) if log_space else mixed
+    np.testing.assert_allclose(energies.sum(axis=0), mixed_energy, rtol=1e-5, atol=1e-8)
+    # Reading the tracks must not change future reads or the caller's arrays.
+    np.testing.assert_array_equal(mixer.unmixed_feats, unmixed)
+    np.testing.assert_array_equal(mixer.mixed_feats, mixed)
+    for feats, expected in zip((base, added, unscaled), original):
+        np.testing.assert_array_equal(feats, expected)
 
 
 def test_feature_mixer_handles_empty_array_with_offset():
