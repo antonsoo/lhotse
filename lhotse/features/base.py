@@ -47,10 +47,11 @@ class FeatureExtractor(metaclass=ABCMeta):
     * the ``extract`` method,
     * the ``frame_shift`` property.
 
-    Feature extractors that support feature-domain mixing should additionally specify two static methods:
+    Feature extractors that support feature-domain mixing should additionally specify three static methods:
 
-    * ``compute_energy``, and
-    * ``mix``.
+    * ``compute_energy``,
+    * ``mix``, and
+    * ``scale``.
 
     By itself, the ``FeatureExtractor`` offers the following high-level methods
     that are not intended for overriding:

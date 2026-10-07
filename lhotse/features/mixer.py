@@ -19,7 +19,7 @@ class FeatureMixer:
     (only positive values are supported).
     The SNR is relative to the energy of the signal used to initialize the ``FeatureMixer``.
 
-    It relies on the ``FeatureExtractor`` to have defined ``mix`` and ``compute_energy`` methods,
+    It relies on the ``FeatureExtractor`` to have defined ``mix``, ``compute_energy``, and ``scale`` methods,
     so that the ``FeatureMixer`` knows how to scale and add two feature matrices together.
     """
 
@@ -69,7 +69,11 @@ class FeatureMixer:
         Return a numpy ndarray with the shape (num_tracks, num_frames, num_features), where each track's
         feature matrix is padded and scaled adequately to the offsets and SNR used in ``add_to_mix`` call.
         """
-        return np.stack(self.tracks)
+        unmixed = np.stack(self.tracks)
+        for idx, gain in enumerate(self.gains, start=1):
+            if gain != 1.0:
+                unmixed[idx] = self.feature_extractor.scale(unmixed[idx], gain)
+        return unmixed
 
     @property
     def mixed_feats(self) -> np.ndarray:
