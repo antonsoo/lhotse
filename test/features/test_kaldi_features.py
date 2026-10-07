@@ -18,7 +18,7 @@ from lhotse.features.kaldi.extractors import (
 )
 from lhotse.features.kaldi.layers import Wav2LogFilterBank, Wav2MFCC, Wav2Spec
 from lhotse.testing.random import deterministic_rng
-from lhotse.utils import is_torchaudio_available
+from lhotse.utils import EPSILON, is_torchaudio_available
 
 
 @pytest.fixture()
@@ -126,6 +126,36 @@ def test_kaldi_spectrogram_extractor(recording):
     spec = Spectrogram()
     feats = spec.extract(recording.load_audio(), recording.sampling_rate)
     assert feats.shape == (1604, 257)
+
+
+def test_kaldi_log_spectrogram_energy():
+    features = np.log(np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32))
+    assert LogSpectrogram.compute_energy(features) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("gain", [0.1, 1.0, 10.0])
+def test_kaldi_log_spectrogram_mix(gain):
+    # Include non-overlapping frames and a frame where both tracks are padding.
+    features_a = np.array(
+        [[-1000.0, np.log(0.1)], [np.log(2.0), -1000.0]], dtype=np.float32
+    )
+    features_b = np.array([[np.log(0.2), -1000.0], [0.0, -1000.0]], dtype=np.float32)
+    mixed = LogSpectrogram.mix(features_a, features_b, gain)
+    expected = np.array([[0.2 * gain, 0.1], [2.0 + gain, EPSILON]], dtype=np.float32)
+    np.testing.assert_allclose(np.exp(mixed), expected, rtol=1e-6, atol=1e-11)
+    assert mixed.dtype == features_a.dtype
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("gain", [0.1, 1.0, 10.0])
+def test_kaldi_log_spectrogram_scale(dtype, gain):
+    energies = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=dtype)
+    features = np.log(energies)
+    original = features.copy()
+    scaled = LogSpectrogram.scale(features, gain)
+    np.testing.assert_allclose(np.exp(scaled), gain * energies, rtol=1e-6)
+    assert scaled.dtype == features.dtype
+    np.testing.assert_array_equal(features, original)
 
 
 @pytest.mark.skipif(not is_torchaudio_available(), reason="torchaudio not available")

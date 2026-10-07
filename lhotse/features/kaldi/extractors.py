@@ -471,15 +471,22 @@ class LogSpectrogram(FeatureExtractor):
     def mix(
         features_a: np.ndarray, features_b: np.ndarray, energy_scaling_factor_b: float
     ) -> np.ndarray:
-        return features_a + energy_scaling_factor_b * features_b
+        return np.log(
+            np.maximum(
+                EPSILON,
+                np.exp(features_a) + energy_scaling_factor_b * np.exp(features_b),
+            )
+        )
 
     @staticmethod
     def compute_energy(features: np.ndarray) -> float:
-        return float(np.sum(features))
+        return float(np.sum(np.exp(features)))
 
     @staticmethod
     def scale(features: np.ndarray, energy_scaling_factor: float) -> np.ndarray:
-        return energy_scaling_factor * features
+        return features + np.asarray(
+            np.log(energy_scaling_factor), dtype=features.dtype
+        )
 
 
 def _extract_batch(
