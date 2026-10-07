@@ -113,13 +113,10 @@ class FeatureMixer:
         :param offset: How many seconds to shift ``feats`` in time. For mixing, the signal will be padded before
         the start with low energy values.
         """
-        if len(feats) == 0:
-            return  # do nothing for empty arrays
-
         assert offset >= 0.0, "Negative offset in mixing is not supported."
 
         assert (
-            self.tracks[0].ndim == feats.ndim
+            len(feats) == 0 or self.tracks[0].ndim == feats.ndim
         ), f"Feature dimensions mismatch in mixing"
 
         reference_feats = self.tracks[0]
@@ -143,6 +140,10 @@ class FeatureMixer:
                     ]
                 )
                 self.tracks[idx] = padded_track
+
+        if len(feats) == 0:
+            # An empty padding track can still extend the mix to its offset.
+            return
 
         # When there is an offset, we need to pad before the start of the features we're adding.
         if offset > 0:

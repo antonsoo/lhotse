@@ -625,6 +625,29 @@ def test_cut_set_mix_snr_is_randomized():
     assert c0.tracks[1].snr != c1.tracks[1].snr
 
 
+@pytest.mark.parametrize("duration,offset", [(0.794, 0.014), (0.804, 0.004)])
+def test_unmix_group_with_subframe_padding(duration, offset):
+    speech, first, second = DummyManifest(CutSet, begin_id=0, end_id=3, with_data=True)
+    speech = speech.truncate(duration=0.811)
+    first = first.truncate(duration=0.2)
+    second = second.truncate(duration=duration)
+    mixed = speech.mix(first, tag="noise").mix(
+        second, offset_other_by=offset, tag="noise"
+    )
+    speech, noise = [deserialize_item(c.to_dict()) for c in mixed.unmix(tag="noise")]
+
+    # The 3 ms of trailing padding adds no frames, but its offset still sets
+    # the endpoint of the noise group. Its final frame must be silent.
+    assert noise.tracks[-1].cut.num_frames == 0
+    np.testing.assert_allclose(np.exp(noise.load_features()[-1]), 1e-10, rtol=1e-5)
+    np.testing.assert_allclose(
+        np.exp(speech.load_features()) + np.exp(noise.load_features()),
+        np.exp(mixed.load_features()),
+        rtol=1e-5,
+        atol=1e-8,
+    )
+
+
 def test_cut_set_mix_is_lazy():
     cuts = DummyManifest(CutSet, begin_id=0, end_id=2)
 

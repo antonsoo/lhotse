@@ -297,6 +297,29 @@ def test_feature_mixer_handles_empty_array():
     np.testing.assert_equal(fmix_feat, f1)
 
 
+@pytest.mark.parametrize("offset,expected_frames", [(0.0, 5), (0.03, 5), (0.08, 8)])
+@pytest.mark.parametrize("shape", [(5, 3), (5, 3, 2)])
+def test_feature_mixer_empty_track_preserves_endpoint(offset, expected_frames, shape):
+    base = np.arange(np.prod(shape), dtype=np.float32).reshape(shape) / 10
+    mixer = FeatureMixer(Fbank(), base, frame_shift=0.01)
+    mixer.add_to_mix(base[:2], sampling_rate=16000, offset=0.01, snr=10.0)
+    mixed = mixer.mixed_feats.copy()
+    unmixed = mixer.unmixed_feats.copy()
+    gains = mixer.gains.copy()
+
+    # Empty arrays need not have the same rank as the source features.
+    mixer.add_to_mix(np.array([]), sampling_rate=16000, offset=offset, snr=5.0)
+
+    assert mixer.mixed_feats.shape == (expected_frames, *shape[1:])
+    assert mixer.unmixed_feats.shape == (2, expected_frames, *shape[1:])
+    assert mixer.mixed_feats.dtype == base.dtype
+    assert mixer.gains == gains
+    np.testing.assert_array_equal(mixer.mixed_feats[:5], mixed)
+    np.testing.assert_array_equal(mixer.unmixed_feats[:, :5], unmixed)
+    np.testing.assert_allclose(np.exp(mixer.mixed_feats[5:]), 1e-10, rtol=1e-5)
+    np.testing.assert_array_equal(np.exp(mixer.unmixed_feats[:, 5:]), 0.0)
+
+
 def test_feature_mixer_handles_empty_array_with_offset():
     # Treat it more like a test of "it runs" rather than "it works"
     sr = 16000
