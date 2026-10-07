@@ -254,6 +254,7 @@ class MixedCut(Cut):
         :attr:`MixTrack.tag` matches ``tag``. For exact SNR preservation, the grouped
         outputs may carry an internal muted SNR-reference track that is ignored by the
         public track views but retained for mixing math.
+        Padding around an unlabeled group does not hide its track tags.
 
         :param tag: Optional track-group label to split on.
         :return: A list of one cut per track, or two grouped cuts when ``tag`` is provided.
@@ -263,6 +264,24 @@ class MixedCut(Cut):
             for track in _get_audible_tracks(self)
             if not isinstance(track.cut, PaddingCut)
         ]
+        if (
+            tag is not None
+            and len(tracks) == 1
+            and isinstance(tracks[0].cut, MixedCut)
+            and tracks[0].snr is None
+            and tracks[0].tag is None
+            and not self.transforms
+            and not tracks[0].cut.transforms
+            and any(isinstance(t.cut, PaddingCut) for t in self.tracks)
+        ):
+            # Padding a group with a hidden SNR reference keeps it nested. Match
+            # its own tags, then restore the surrounding offset and padding.
+            return [
+                _make_padding_cut(self)
+                if isinstance(cut, PaddingCut)
+                else _to_unmixed_cut(self, [fastcopy(tracks[0], cut=cut)])
+                for cut in tracks[0].cut.unmix(tag=tag)
+            ]
         if tag is None:
             return [_to_unmixed_cut(self, [track]) for track in tracks]
         without_tag = [track for track in tracks if track.tag != tag]

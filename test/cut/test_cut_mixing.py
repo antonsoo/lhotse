@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from lhotse.audio import Recording
-from lhotse.cut import CutSet, MixedCut, MonoCut, MultiCut
+from lhotse.cut import CutSet, MixedCut, MixTrack, MonoCut, MultiCut
 from lhotse.serialization import deserialize_item
 from lhotse.supervision import SupervisionSegment
 from lhotse.testing.dummies import (
@@ -273,6 +273,62 @@ def test_mixed_cut_unmix_hides_muted_reference_from_public_views():
     }
     assert noise_only.first_non_padding_track.tag == "noise"
     assert not noise_only.first_non_padding_track.mute
+
+
+@pytest.mark.parametrize("snr", [None, -10, 10])
+@pytest.mark.parametrize("offset", [0.1, 0.6])
+def test_mixed_cut_unmix_padded_group_retains_tags(snr, offset):
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    noise1 = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
+    noise2 = DummyManifest(CutSet, begin_id=101, end_id=102, with_data=True)[0]
+    mixed = (
+        speech.truncate(duration=1.0)
+        .mix(noise1.truncate(duration=0.35), snr=snr, tag="noise")
+        .mix(
+            noise2.truncate(duration=0.4),
+            offset_other_by=offset,
+            snr=snr,
+            tag="noise",
+        )
+    )
+    _, noise_only = mixed.unmix(tag="noise")
+    noise_only = deserialize_item(noise_only.to_dict())
+
+    without_noise, with_noise = noise_only.unmix(tag="noise")
+    np.testing.assert_allclose(with_noise.load_audio(), noise_only.load_audio())
+    np.testing.assert_allclose(without_noise.load_audio(), 0)
+    np.testing.assert_allclose(with_noise.load_features(), noise_only.load_features())
+    assert without_noise.duration == with_noise.duration == mixed.duration
+
+
+@pytest.mark.parametrize("outer_tag", [None, "background"])
+def test_mixed_cut_unmix_nested_padding_respects_group_tags(outer_tag):
+    speech, noise, music = list(
+        DummyManifest(CutSet, begin_id=0, end_id=3, with_data=True)
+    )
+    mixed = MixedCut(
+        id="tagged-mix",
+        tracks=[
+            MixTrack(speech.truncate(duration=1.0), tag="speech"),
+            MixTrack(noise.truncate(duration=0.35), snr=10, tag="noise"),
+            MixTrack(music.truncate(duration=0.4), snr=5, tag="music"),
+        ],
+    )
+    background, _ = mixed.unmix(tag="speech")
+    background.tracks[0].tag = outer_tag
+    background = background.pad(duration=1.2, direction="both")
+    background = deserialize_item(background.to_dict())
+
+    without_noise, with_noise = background.unmix(tag="noise")
+    expected_noise = mixed.unmix(tag="noise")[1].pad(duration=1.2, direction="both")
+    expected = expected_noise.load_audio() if outer_tag is None else 0
+    np.testing.assert_allclose(with_noise.load_audio(), expected, atol=1e-7)
+    np.testing.assert_allclose(
+        without_noise.load_audio() + with_noise.load_audio(),
+        background.load_audio(),
+        atol=1e-7,
+    )
+    assert without_noise.duration == with_noise.duration == background.duration
 
 
 def test_mixed_cut_backward_compat_deserializes_top_level_snr_reference():
