@@ -17,6 +17,7 @@ from lhotse.features import (
     FeatureSet,
     FeatureSetBuilder,
     Mfcc,
+    Spectrogram,
     TorchaudioSpectrogram,
     TorchaudioSpectrogramConfig,
 )
@@ -295,6 +296,32 @@ def test_feature_mixer_handles_empty_array():
 
     fmix_feat = mixer.mixed_feats
     np.testing.assert_equal(fmix_feat, f1)
+
+
+@pytest.mark.parametrize("channels", [None, 1, 2])
+@pytest.mark.parametrize("feature_extractor", [Fbank(), Spectrogram()])
+def test_feature_mixer_base_offset(feature_extractor, channels):
+    shape = (2, 3) if channels is None else (2, 3, channels)
+    base = np.ones(shape, dtype=np.float32)
+    padding_value = -1000.0 if isinstance(feature_extractor, Fbank) else 0.0
+    mixer = FeatureMixer(
+        feature_extractor=feature_extractor,
+        base_feats=base,
+        frame_shift=0.01,
+        padding_value=padding_value,
+        base_offset_frames=3,
+    )
+    assert mixer.reference_energy == feature_extractor.compute_energy(base)
+    np.testing.assert_array_equal(mixer.mixed_feats[:3], padding_value)
+    np.testing.assert_array_equal(mixer.mixed_feats[3:], base)
+    assert mixer.mixed_feats.shape == (5, *shape[1:])
+    assert mixer.unmixed_feats.shape == (1, 5, *shape[1:])
+    assert mixer.mixed_feats.dtype == base.dtype
+
+    mixer.add_to_mix(base, sampling_rate=16000)
+    assert mixer.unmixed_feats.shape == (2, 5, *shape[1:])
+    np.testing.assert_array_equal(mixer.unmixed_feats[1, :2], base)
+    np.testing.assert_array_equal(mixer.unmixed_feats[1, 2:], padding_value)
 
 
 def test_feature_mixer_handles_empty_array_with_offset():

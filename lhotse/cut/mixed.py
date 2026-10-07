@@ -1214,6 +1214,9 @@ class MixedCut(Cut):
         tracks = _get_audible_tracks(self)
         first_track = tracks[0]
         first_cut = first_track.cut
+        first_offset_frames = compute_num_frames(
+            first_track.offset, first_cut.frame_shift, first_cut.sampling_rate
+        )
 
         # First, check for a simple scenario: just a single cut with padding.
         # When that is the case, we don't have to instantiate a feature extractor,
@@ -1239,7 +1242,10 @@ class MixedCut(Cut):
                     )
                     * padding_val
                 )
-            feats[: first_cut.num_frames, ...] = first_cut_feats
+            end = min(first_offset_frames + first_cut.num_frames, self.num_frames)
+            feats[first_offset_frames:end, ...] = first_cut_feats[
+                : end - first_offset_frames
+            ]
             return feats
 
         # When there is more than one "regular" cut, we will perform an actual mix.
@@ -1269,6 +1275,7 @@ class MixedCut(Cut):
             base_feats=first_cut_feats,
             frame_shift=first_cut.frame_shift,
             reference_energy=reference_energy,
+            base_offset_frames=first_offset_frames,
         )
         for track in tracks[1:]:
             if track is reference_track and reference_feats is not None:

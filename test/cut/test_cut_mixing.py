@@ -250,6 +250,48 @@ def test_mixed_cut_unmix_preserves_audio_gain():
     np.testing.assert_allclose(noise_only.load_audio(), restored_noise.load_audio())
 
 
+@pytest.mark.parametrize("offset", [0.0, 0.4])
+@pytest.mark.parametrize("noise_duration", [0.2, 0.8])
+@pytest.mark.parametrize("snr", [None, 10.0])
+def test_mixed_cut_unmix_preserves_feature_offsets(offset, noise_duration, snr):
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    noise = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
+    speech = speech.truncate(duration=0.8)
+    noise = noise.truncate(duration=noise_duration)
+    mixed = speech.mix(noise, offset_other_by=offset, snr=snr, tag="noise")
+
+    for components in (mixed.unmix(), mixed.unmix(tag="noise")):
+        features = [component.load_features() for component in components]
+        assert all(feats.shape[0] == mixed.num_frames for feats in features)
+        np.testing.assert_allclose(
+            sum(np.exp(feats) for feats in features),
+            np.exp(mixed.load_features()),
+            rtol=1e-5,
+            atol=1e-8,
+        )
+        # The delayed track must retain its leading silence, including when the
+        # same cut also needs trailing padding.
+        np.testing.assert_allclose(
+            np.exp(features[1][: round(offset / 0.01)]), 0, atol=1e-8
+        )
+
+
+def test_mixed_cut_unmix_feature_offset_rounding():
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    noise = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
+    speech = speech.truncate(duration=0.811)
+    noise = noise.truncate(duration=0.805)
+    mixed = speech.mix(noise, offset_other_by=0.005, tag="noise")
+    speech_only, noise_only = mixed.unmix(tag="noise")
+    # The rounded offset plus source length can exceed the total by one frame.
+    np.testing.assert_allclose(
+        np.exp(speech_only.load_features()) + np.exp(noise_only.load_features()),
+        np.exp(mixed.load_features()),
+        rtol=1e-5,
+        atol=1e-8,
+    )
+
+
 def test_mixed_cut_unmix_hides_muted_reference_from_public_views():
     speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
     noise1 = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
