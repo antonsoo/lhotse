@@ -831,6 +831,10 @@ class DynamicBucketer:
         if self._saved_state is not None:
             state = self._restore_from_saved_state()
             self._selection_state = state
+            if self.concurrent:
+                # The restored buckets still have to be refilled from the source.
+                self._source_exhausted = False
+                self._start_data_producer_thread()
         else:
             if self.concurrent:
                 self._source_exhausted = False

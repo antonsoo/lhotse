@@ -494,6 +494,50 @@ class TestIndexedSamplerStateCapture:
         restored_next = [c.id for c in next(sampler2)]
         assert restored_next == expected_next
 
+    def test_dynamic_bucketing_indexed_concurrent_restore_does_not_hang(self, tmp_path):
+        import threading
+        import time
+
+        path = tmp_path / "cuts.jsonl"
+        DummyManifest(CutSet, begin_id=0, end_id=40).to_jsonl(path)
+
+        def make_sampler():
+            return DynamicBucketingSampler(
+                CutSet.from_file(path, indexed=True),
+                max_cuts=4,
+                shuffle=True,
+                num_buckets=2,
+                concurrent=True,
+            )
+
+        sampler1 = make_sampler()
+        sampler_iter = iter(sampler1)
+        seen = [c.id for _ in range(3) for c in next(sampler_iter)]
+        # Let the producer thread read the whole manifest, so that the state
+        # we capture does not depend on how far it got.
+        deadline = time.monotonic() + 30
+        while not sampler1._bucketer._source_exhausted:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        sd = deepcopy(sampler1.state_dict())
+        sampler1.cuts_iter.close()
+
+        sampler2 = make_sampler()
+        sampler2.load_state_dict(sd)
+        remaining = []
+        # Restoring used to wait forever for a producer thread that was never
+        # started; iterate in a thread so that a hang fails the test instead.
+        worker = threading.Thread(
+            target=lambda: remaining.extend(c.id for b in sampler2 for c in b),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=30)
+        assert not worker.is_alive()
+
+        all_ids = [c.id for c in CutSet.from_file(path)]
+        assert sorted(seen + remaining) == sorted(all_ids)
+
     def test_dynamic_bucketing_indexed_restore_missing_o1_state_raises(self, tmp_path):
         path = tmp_path / "cuts.jsonl"
         DummyManifest(CutSet, begin_id=0, end_id=60).to_jsonl(path)
