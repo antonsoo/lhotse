@@ -106,6 +106,65 @@ def test_collect_restore_nested(tmp_path):
     assert first_k + remaining == all_items
 
 
+@pytest.mark.parametrize("consumed", [10, 12, 15, 17, 20])
+def test_collect_restore_chain_in_a_later_pass(tmp_path, consumed):
+    """
+    A chain checkpointed in its second pass must still yield the sources it has
+    not reached yet in that pass: their own state says "exhausted", but that is
+    where the first pass left them.
+    """
+    p1 = _make_jsonl(tmp_path, n=5, name="a.jsonl")
+    p2 = _make_jsonl(tmp_path, n=5, name="b.jsonl")
+
+    def make_pipeline():
+        chain = LazyIteratorChain(LazyJsonlIterator(p1), LazyJsonlIterator(p2))
+        return LazyRepeater(chain, times=2)
+
+    all_items = list(make_pipeline())
+    assert len(all_items) == 20
+
+    pipe1 = make_pipeline()
+    gen1 = iter(pipe1)
+    first_k = _consume(gen1, consumed)
+    sd = collect_state_dict(pipe1)
+
+    pipe2 = make_pipeline()
+    restore_state_dict(pipe2, sd)
+    remaining = list(pipe2)
+
+    assert first_k + remaining == all_items
+
+
+@pytest.mark.parametrize("consumed", [12, 13, 16, 24])
+def test_collect_restore_multiplexer_in_a_later_pass(tmp_path, consumed):
+    """
+    Same as above for a multiplexer: a source it has not drawn from yet in its
+    second pass (here the low-weight one) must not be resumed as "exhausted".
+    """
+    p1 = _make_jsonl(tmp_path, n=10, name="a.jsonl")
+    p2 = _make_jsonl(tmp_path, n=2, name="b.jsonl")
+
+    def make_pipeline():
+        mux = LazyIteratorMultiplexer(
+            LazyJsonlIterator(p1), LazyJsonlIterator(p2), weights=[0.95, 0.05], seed=0
+        )
+        return LazyRepeater(mux, times=2)
+
+    all_items = list(make_pipeline())
+    assert len(all_items) == 24
+
+    pipe1 = make_pipeline()
+    gen1 = iter(pipe1)
+    first_k = _consume(gen1, consumed)
+    sd = collect_state_dict(pipe1)
+
+    pipe2 = make_pipeline()
+    restore_state_dict(pipe2, sd)
+    remaining = list(pipe2)
+
+    assert first_k + remaining == all_items
+
+
 # ---------------------------------------------------------------------------
 # collect / restore — Filter + Mapper
 # ---------------------------------------------------------------------------

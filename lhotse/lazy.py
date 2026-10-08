@@ -861,20 +861,20 @@ class LazyIteratorChain(IteratorNode):
             # resolved seed) are enough to reconstruct permutation deterministically.
             self._restored = True
             return
-        # Sequential path: only restore sources that will still be iterated
-        # (at or after current_iter_idx in iter_order).
+        # Sequential path: only the source that was being iterated has a position
+        # to resume from. The sources after it start from the beginning, like in an
+        # uninterrupted pass: their saved state describes where an earlier pass
+        # left them (typically exhausted), not a position in this one.
         order = (
             self._iter_order
             if self._iter_order is not None
             else list(range(len(self.sources)))
         )
-        active = set(order[self._current_iter_idx :])
-        for i, (s, inner_sd) in enumerate(
-            zip(self.sources, sd.get("inner_states", []))
-        ):
-            if i not in active or inner_sd is None:
-                continue
-            _try_restore_child_state(s, inner_sd)
+        inner_states = sd.get("inner_states", [])
+        if self._current_iter_idx < len(order):
+            current = order[self._current_iter_idx]
+            if current < len(inner_states) and inner_states[current] is not None:
+                _try_restore_child_state(self.sources[current], inner_states[current])
         self._restored = True
 
 
@@ -919,6 +919,7 @@ class LazyIteratorMultiplexer(IteratorNode):
         # Iteration state
         self._rng_state = None
         self._exhausted: Optional[list] = None
+        self._started: Optional[list] = None
         self._restored = False
 
     @property
@@ -971,11 +972,18 @@ class LazyIteratorMultiplexer(IteratorNode):
                 if self._exhausted is not None
                 else [False] * len(iters)
             )
+            started = (
+                list(self._started)
+                if self._started is not None
+                else [True] * len(iters)
+            )
             if self._rng_state is not None:
                 rng.setstate(self._rng_state)
         else:
             exhausted = [False for _ in range(len(iters))]
+            started = [False for _ in range(len(iters))]
         self._exhausted = exhausted
+        self._started = started
 
         def should_continue():
             if self.stop_early:
@@ -994,6 +1002,7 @@ class LazyIteratorMultiplexer(IteratorNode):
             idx = rng.choices(active_indexes, weights=active_weights, k=1)[0]
             self._rng_state = rng.getstate()
             selected = iters[idx]
+            started[idx] = True
             try:
                 item = next(selected)
                 graph_token = None
@@ -1019,6 +1028,7 @@ class LazyIteratorMultiplexer(IteratorNode):
         sd = {
             "rng_state": self._rng_state,
             "exhausted": list(self._exhausted) if self._exhausted is not None else None,
+            "started": list(self._started) if self._started is not None else None,
         }
         inner_states = []
         for s in self.sources:
@@ -1029,6 +1039,8 @@ class LazyIteratorMultiplexer(IteratorNode):
     def load_state_dict(self, sd: dict) -> None:
         self._rng_state = sd["rng_state"]
         self._exhausted = sd["exhausted"]
+        # Checkpoints saved before "started" was recorded restore every source.
+        self._started = sd.get("started")
         active = None
         if self._exhausted is not None:
             active = {i for i, exhausted in enumerate(self._exhausted) if not exhausted}
@@ -1036,6 +1048,11 @@ class LazyIteratorMultiplexer(IteratorNode):
             zip(self.sources, sd.get("inner_states", []))
         ):
             if active is not None and i not in active:
+                continue
+            if self._started is not None and not self._started[i]:
+                # Not drawn from yet in this pass: its saved state describes where
+                # an earlier pass left it (typically exhausted), so it has to start
+                # from the beginning, like in an uninterrupted pass.
                 continue
             _try_restore_child_state(s, inner_sd)
         self._restored = True

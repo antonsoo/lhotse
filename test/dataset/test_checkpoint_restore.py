@@ -127,6 +127,43 @@ class TestDynamicSamplerCheckpoint:
 
         assert sampler2.diagnostics.current_epoch_stats.total_batches == 3
 
+    @pytest.mark.parametrize("epoch", [0, 1])
+    @pytest.mark.parametrize("num_batches", [1, 2, 3])
+    def test_dynamic_sampler_restore_over_concatenated_indexed_cuts(
+        self, tmp_path, epoch, num_batches
+    ):
+        """Restoring inside the first manifest must not drop the manifests after it."""
+        paths = [tmp_path / "a.jsonl", tmp_path / "b.jsonl"]
+        DummyManifest(CutSet, begin_id=0, end_id=6).to_file(paths[0])
+        DummyManifest(CutSet, begin_id=100, end_id=106).to_file(paths[1])
+
+        def make_sampler():
+            cuts = CutSet.from_file(paths[0], indexed=True) + CutSet.from_file(
+                paths[1], indexed=True
+            )
+            return DynamicCutSampler(cuts, max_cuts=3)
+
+        sampler = make_sampler()
+        for previous_epoch in range(epoch):
+            sampler.set_epoch(previous_epoch)
+            assert len(list(sampler)) == 4
+        sampler.set_epoch(epoch)
+        sampler_iter = iter(sampler)
+        for _ in range(num_batches):
+            next(sampler_iter)
+        state = deepcopy(sampler.state_dict())
+        expected = []
+        while True:
+            try:
+                expected.append(next(sampler_iter))
+            except StopIteration:
+                break
+        assert len(expected) == 4 - num_batches
+
+        restored = make_sampler()
+        restored.load_state_dict(state)
+        assert list(restored) == expected
+
 
 class TestBackwardCompatOldStateDict:
     def test_old_state_dict_without_cuts_state(self, cuts):
