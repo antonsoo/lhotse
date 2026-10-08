@@ -108,6 +108,7 @@ class SimpleCutSampler(CutSampler):
         state_dict.update(
             {
                 "time_constraint": self.time_constraint.state_dict(),
+                "num_consumed": self.data_source.num_consumed,
             }
         )
         return state_dict
@@ -139,13 +140,21 @@ class SimpleCutSampler(CutSampler):
                 f"We will overwrite the settings with the received state_dict."
             )
         self.time_constraint = time_constraint
+        num_consumed = state_dict.pop("num_consumed", None)
 
         super().load_state_dict(state_dict)
 
         # Restore the data source's state
         if self.shuffle:
             self.data_source.shuffle(self.seed + self.epoch)
-        self.data_source.fast_forward(self.diagnostics.current_epoch_stats.total_cuts)
+        # Diagnostics count kept cuts only for this rank, whereas the source
+        # advances through batches for every rank. Older checkpoints did not
+        # store that source position; retain their diagnostic-based fallback.
+        self.data_source.fast_forward(
+            num_consumed
+            if num_consumed is not None
+            else self.diagnostics.current_epoch_stats.total_cuts
+        )
 
     def __iter__(self) -> "SimpleCutSampler":
         """

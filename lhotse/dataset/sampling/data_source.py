@@ -29,6 +29,14 @@ class DataSource:
             self._total_cuts = None
         self._remaining_duration = self._total_duration
         self.remaining_cuts = self._total_cuts
+        self._num_consumed = 0
+
+    @property
+    def num_consumed(self) -> int:
+        """Number of cuts consumed, excluding cuts returned with ``take_back``."""
+        if self.is_lazy:
+            return self._num_consumed
+        return self._total_cuts - self.remaining_cuts
 
     @property
     def is_lazy(self) -> bool:
@@ -68,6 +76,8 @@ class DataSource:
         if not self.is_lazy:
             self._remaining_duration += cut.duration
             self.remaining_cuts += 1
+        else:
+            self._num_consumed -= 1
 
     def reset(self) -> None:
         """Reset the iterable state of DataSource."""
@@ -75,6 +85,7 @@ class DataSource:
         self._reusable.clear()
         self._remaining_duration = self._total_duration
         self.remaining_cuts = self._total_cuts
+        self._num_consumed = 0
 
     def fast_forward(self, steps: int) -> None:
         """Advance the data source by ``steps`` amount of steps."""
@@ -96,6 +107,8 @@ class DataSource:
         if not self.is_lazy:
             self._remaining_duration -= next_cut.duration
             self.remaining_cuts -= 1
+        else:
+            self._num_consumed += 1
         return next_cut
 
     def __len__(self) -> int:
