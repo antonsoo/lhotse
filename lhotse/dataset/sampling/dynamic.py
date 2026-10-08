@@ -179,7 +179,9 @@ class DynamicCutSampler(CutSampler):
 
     def _fast_forward(self):
         current_epoch = self.diagnostics.current_epoch
-        num_batches_to_iter = self.diagnostics.current_epoch_stats.total_batches
+        # Every batch this sampler yielded was a kept batch. Discarded "batches"
+        # (the cuts rejected by .filter() and a dropped last batch) are not steps.
+        num_batches_to_iter = self.diagnostics.current_epoch_stats.kept_batches
 
         # Set the right epoch
         self.set_epoch(current_epoch)
