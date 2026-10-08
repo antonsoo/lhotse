@@ -5,6 +5,7 @@ import pytest
 
 from lhotse.audio import Recording
 from lhotse.cut import CutSet, MixedCut, MonoCut, MultiCut
+from lhotse.features.io import MemoryRawWriter
 from lhotse.serialization import deserialize_item
 from lhotse.supervision import SupervisionSegment
 from lhotse.testing.dummies import (
@@ -12,6 +13,7 @@ from lhotse.testing.dummies import (
     dummy_multi_cut,
     remove_spaces_from_segment_text,
 )
+from lhotse.utils import fastcopy
 from lhotse.utils import nullcontext as does_not_raise
 
 # Note:
@@ -248,6 +250,94 @@ def test_mixed_cut_unmix_preserves_audio_gain():
     assert isinstance(restored_noise, MixedCut)
     assert any(track.is_snr_reference and track.mute for track in restored_noise.tracks)
     np.testing.assert_allclose(noise_only.load_audio(), restored_noise.load_audio())
+
+
+@pytest.mark.parametrize("offset", [0.0, 0.4])
+@pytest.mark.parametrize("noise_duration", [0.2, 0.8])
+@pytest.mark.parametrize("snr", [None, 10.0])
+def test_mixed_cut_unmix_preserves_feature_offsets(offset, noise_duration, snr):
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    noise = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
+    speech = speech.truncate(duration=0.8)
+    noise = noise.truncate(duration=noise_duration)
+    mixed = speech.mix(noise, offset_other_by=offset, snr=snr, tag="noise")
+
+    for components in (mixed.unmix(), mixed.unmix(tag="noise")):
+        features = [component.load_features() for component in components]
+        assert all(feats.shape[0] == mixed.num_frames for feats in features)
+        np.testing.assert_allclose(
+            sum(np.exp(feats) for feats in features),
+            np.exp(mixed.load_features()),
+            rtol=1e-5,
+            atol=1e-8,
+        )
+        # The delayed track must retain its leading silence, including when the
+        # same cut also needs trailing padding.
+        np.testing.assert_allclose(
+            np.exp(features[1][: round(offset / 0.01)]), 0, atol=1e-8
+        )
+
+
+def test_mixed_cut_unmix_feature_offset_rounding():
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    noise = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
+    speech = speech.truncate(duration=0.811)
+    noise = noise.truncate(duration=0.805)
+    mixed = speech.mix(noise, offset_other_by=0.005, tag="noise")
+    speech_only, noise_only = mixed.unmix(tag="noise")
+    # The rounded offset plus source length can exceed the total by one frame.
+    np.testing.assert_allclose(
+        np.exp(speech_only.load_features()) + np.exp(noise_only.load_features()),
+        np.exp(mixed.load_features()),
+        rtol=1e-5,
+        atol=1e-8,
+    )
+
+
+@pytest.mark.parametrize(
+    "offset, noise_duration", [(0.005, 0.805), (0.004, 0.804), (0.1, 0.7)]
+)
+@pytest.mark.parametrize("snr", [0.0, 10.0])
+@pytest.mark.parametrize("speech_duration", [0.811, 0.95])
+@pytest.mark.parametrize("channels", [None, 2])
+def test_mixed_cut_unmix_padded_group_preserves_feature_frames(
+    offset, noise_duration, snr, speech_duration, channels
+):
+    speech = DummyManifest(CutSet, begin_id=0, end_id=1, with_data=True)[0]
+    noise1 = DummyManifest(CutSet, begin_id=100, end_id=101, with_data=True)[0]
+    noise2 = DummyManifest(CutSet, begin_id=101, end_id=102, with_data=True)[0]
+    if channels is not None:
+        with MemoryRawWriter() as storage:
+            for cut in (speech, noise1, noise2):
+                feats = np.repeat(cut.load_features()[..., None], channels, axis=-1)
+                cut.features = fastcopy(
+                    cut.features,
+                    storage_type=storage.name,
+                    storage_path=storage.storage_path,
+                    storage_key=storage.write(cut.id, feats),
+                )
+    mixed = speech.truncate(duration=speech_duration).mix(
+        noise1.truncate(duration=0.2), snr=snr, tag="noise"
+    )
+    mixed = mixed.mix(
+        noise2.truncate(duration=noise_duration),
+        offset_other_by=offset,
+        snr=snr,
+        tag="noise",
+    )
+
+    components = [deserialize_item(c.to_dict()) for c in mixed.unmix(tag="noise")]
+    assert all(c.num_frames == mixed.num_frames for c in components)
+    # Rounding the shorter group before padding can drop or repeat its last frame.
+    np.testing.assert_allclose(
+        sum(np.exp(c.load_features()) for c in components),
+        np.exp(mixed.load_features()),
+        rtol=1e-5,
+        atol=1e-8,
+    )
+    np.testing.assert_allclose(
+        sum(c.load_audio() for c in components), mixed.load_audio(), atol=1e-7
+    )
 
 
 def test_mixed_cut_unmix_hides_muted_reference_from_public_views():

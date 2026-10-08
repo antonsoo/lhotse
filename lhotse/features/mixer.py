@@ -15,7 +15,7 @@ class FeatureMixer:
     that represents the "reference" signal for the mix.
     Other signals can be mixed to it with different time offsets and SNRs using the
     ``add_to_mix`` method.
-    The time offset is relative to the start of the reference signal
+    The time offset is relative to the start of the mix
     (only positive values are supported).
     The SNR is relative to the energy of the signal used to initialize the ``FeatureMixer``.
 
@@ -30,19 +30,22 @@ class FeatureMixer:
         frame_shift: Seconds,
         padding_value: float = -1000.0,
         reference_energy: Optional[float] = None,
+        base_offset_frames: int = 0,
     ):
         """
         FeatureMixer's constructor.
 
         :param feature_extractor: The ``FeatureExtractor`` instance that specifies how to mix the features.
         :param base_feats: The features used to initialize the ``FeatureMixer`` are a point of reference
-            in terms of energy and offset for all features mixed into them.
+            in terms of energy for all features mixed into them.
         :param frame_shift: Required to correctly compute offset and padding during the mix.
         :param padding_value: The value used to pad the shorter features during the mix.
             This value is adequate only for log space features. For non-log space features,
             e.g. energies, use either 0 or a small positive value like 1e-5.
         :param reference_energy: Optionally pass a reference energy value to compute SNRs against.
             This might be required when ``base_feats`` correspond to padding energies.
+        :param base_offset_frames: Number of padding frames to prepend to ``base_feats``.
+            The reference energy is computed before this padding is added.
         """
         self.feature_extractor = feature_extractor
         self.tracks = [base_feats]
@@ -58,6 +61,11 @@ class FeatureMixer:
             self.reference_energy = feature_extractor.compute_energy(base_feats)
         else:
             self.reference_energy = reference_energy
+
+        if base_offset_frames:
+            self.tracks[0] = np.vstack(
+                [self._get_dummy_array(base_offset_frames), base_feats]
+            )
 
     @property
     def num_features(self):

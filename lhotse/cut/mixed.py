@@ -1209,11 +1209,19 @@ class MixedCut(Cut):
         :return: A numpy ndarray with features and with shape ``(num_frames, num_features)``,
             or ``(num_tracks, num_frames, num_features)``
         """
+        return self._load_features(mixed=mixed)
+
+    def _load_features(
+        self, mixed: bool = True, adjust_num_frames: bool = True
+    ) -> Optional[np.ndarray]:
         if not self.has_features:
             return None
         tracks = _get_audible_tracks(self)
         first_track = tracks[0]
         first_cut = first_track.cut
+        first_offset_frames = compute_num_frames(
+            first_track.offset, first_cut.frame_shift, first_cut.sampling_rate
+        )
 
         # First, check for a simple scenario: just a single cut with padding.
         # When that is the case, we don't have to instantiate a feature extractor,
@@ -1227,7 +1235,12 @@ class MixedCut(Cut):
             and all(isinstance(t.cut, PaddingCut) for t in tracks[1:])
         ):
             padding_val = tracks[1].cut.feat_value
-            first_cut_feats = first_cut.load_features()
+            if type(first_cut) is MixedCut:
+                # Round only after padding: rounding the shorter nested mix can
+                # drop or repeat a frame that belongs in the padded result.
+                first_cut_feats = first_cut._load_features(adjust_num_frames=False)
+            else:
+                first_cut_feats = first_cut.load_features()
             if first_cut_feats.ndim == 2:
                 # 2D features
                 feats = np.ones((self.num_frames, self.num_features)) * padding_val
@@ -1239,7 +1252,10 @@ class MixedCut(Cut):
                     )
                     * padding_val
                 )
-            feats[: first_cut.num_frames, ...] = first_cut_feats
+            end = min(first_offset_frames + first_cut_feats.shape[0], self.num_frames)
+            feats[first_offset_frames:end, ...] = first_cut_feats[
+                : end - first_offset_frames
+            ]
             return feats
 
         # When there is more than one "regular" cut, we will perform an actual mix.
@@ -1269,6 +1285,7 @@ class MixedCut(Cut):
             base_feats=first_cut_feats,
             frame_shift=first_cut.frame_shift,
             reference_energy=reference_energy,
+            base_offset_frames=first_offset_frames,
         )
         for track in tracks[1:]:
             if track is reference_track and reference_feats is not None:
@@ -1285,6 +1302,8 @@ class MixedCut(Cut):
         if mixed:
             # Checking for some edge cases below.
             feats = mixer.mixed_feats
+            if not adjust_num_frames:
+                return feats
             # Note: The slicing below is a work-around for an edge-case
             #  when two cuts have durations that ended with 0.005 (e.g. 10.125 and 5.715)
             #  - then, the feature extractor "squeezed in" a last extra frame and the simple
