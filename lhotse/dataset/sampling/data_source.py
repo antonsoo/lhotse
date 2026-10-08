@@ -114,13 +114,14 @@ class WeightedDataSource(DataSource):
     exceed num_samples
     """
 
-    def __init__(self, items: CutSet, weights: List, num_samples: int):
+    def __init__(self, items: CutSet, weights: List, num_samples: int, seed: int = 0):
         """The constructor of the weighted data source
 
         Args:
             items (CutSet): The cutset itself
             weights (List): A list of values representing the weight of each cut. All values must be positive
             num_samples (int): The number of samples to be drawn. Must smaller than the total number of cuts
+            seed (int): Random seed used for weighted sampling.
         """
         super().__init__(items=items)
         assert len(items) == len(weights), "The length should match"
@@ -134,7 +135,14 @@ class WeightedDataSource(DataSource):
 
         self.weights = weights
         self.num_samples = num_samples
+        self.seed = seed
         self.sampled_indexes = None
+
+    def shuffle(self, seed: int) -> "WeightedDataSource":
+        """Set the weighted draw's seed without changing the weight-to-cut mapping."""
+        self.reset()
+        self.seed = seed
+        return self
 
     def reset(self) -> None:
         """Reset the iterable state of DataSource."""
@@ -144,17 +152,10 @@ class WeightedDataSource(DataSource):
         self._remaining_duration = self._total_duration
         self.remaining_cuts = self._total_cuts
 
-    def fast_forward(self, steps: int) -> None:
-        """Advance the data source by ``steps`` amount of steps."""
-        assert steps >= 0
-        iter(self)
-        for i in range(steps):
-            next(self.sampled_indexes)
-
     def __iter__(self) -> "WeightedDataSource":
         self.reset()
         self._iter = iter(self._shuffled_items)
-        self.sampled_indexes = np.random.choice(
+        self.sampled_indexes = np.random.default_rng(self.seed).choice(
             len(self.weights),
             self.num_samples,
             p=self.weights,

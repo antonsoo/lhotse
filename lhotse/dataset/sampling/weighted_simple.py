@@ -2,7 +2,7 @@ import warnings
 from typing import Any, Dict, List, Optional
 
 from lhotse import CutSet, Seconds
-from lhotse.dataset.sampling.base import TimeConstraint
+from lhotse.dataset.sampling.base import CutSampler, TimeConstraint
 from lhotse.dataset.sampling.data_source import WeightedDataSource
 from lhotse.dataset.sampling.simple import SimpleCutSampler
 
@@ -14,6 +14,9 @@ class WeightedSimpleCutSampler(SimpleCutSampler):
 
     When performing sampling, it avoids having duplicated cuts in the same batch.
     The sampler terminates if the number of sampled cuts reach :attr:`num_samples`
+
+    The weighted draw is determined by ``seed`` and the current epoch, independently
+    of NumPy's global random state. Call :meth:`set_epoch` to draw a new sample.
 
     When one of :attr:`max_duration`, or :attr:`max_cuts` is specified,
     the batch size is dynamic.
@@ -51,10 +54,8 @@ class WeightedSimpleCutSampler(SimpleCutSampler):
         :param max_duration: The maximum total recording duration from ``cuts``.
         :param max_cuts: The maximum number of cuts sampled to form a mini-batch.
             By default, this constraint is off.
-        :param shuffle: When ``True``, the cuts will be shuffled at the start of iteration.
-            Convenient when mini-batch loop is inside an outer epoch-level loop, e.g.:
-            `for epoch in range(10): for batch in dataset: ...` as every epoch will see a
-            different cuts order.
+        :param shuffle: Retained for compatibility with ``SimpleCutSampler``. This sampler
+            always draws weighted random samples, determined by ``seed`` and the epoch.
         :param drop_last: When ``True``, the last batch is dropped if it's incomplete.
         :param world_size: Total number of distributed nodes. We will try to infer it by default.
         :param rank: Index of distributed node. We will try to infer it by default.
@@ -72,7 +73,7 @@ class WeightedSimpleCutSampler(SimpleCutSampler):
         )
         assert not cuts.is_lazy, "This sampler does not support lazy mode!"
         self.data_source = WeightedDataSource(
-            cuts, weights=cuts_weight, num_samples=num_samples
+            cuts, weights=cuts_weight, num_samples=num_samples, seed=seed
         )
 
         self.weights = cuts_weight
@@ -87,9 +88,9 @@ class WeightedSimpleCutSampler(SimpleCutSampler):
         state_dict = super().state_dict()
         state_dict.update(
             {
-                "time_constraint": self.time_constraint.state_dict(),
                 "weights": self.weights,
                 "num_samples": self.num_samples,
+                "num_consumed": self.num_cuts - self.remaining_cuts,
             }
         )
         return state_dict
@@ -115,24 +116,34 @@ class WeightedSimpleCutSampler(SimpleCutSampler):
         time_constraint = TimeConstraint(**state_dict.pop("time_constraint"))
         if self.time_constraint != time_constraint:
             warnings.warn(
-                "SimpleCutSampler.load_state_dict(): Inconsistent time_constraint:\n"
+                "WeightedSimpleCutSampler.load_state_dict(): Inconsistent time_constraint:\n"
                 f"expected {self.time_constraint}\n"
                 f"received {time_constraint}\n"
                 f"We will overwrite the settings with the received state_dict."
             )
         self.time_constraint = time_constraint
-
-        super().load_state_dict(state_dict)
-
-        # Restore the data source's state
-        self.data_source.fast_forward(self.diagnostics.current_epoch_stats.total_cuts)
-
         self.weights = state_dict.pop("weights")
         self.num_samples = state_dict.pop("num_samples")
+        num_consumed = state_dict.pop("num_consumed", None)
+
+        # SimpleCutSampler would consume time_constraint again and restore only
+        # the cuts in this rank's diagnostics, not all the weighted draws.
+        CutSampler.load_state_dict(self, state_dict)
+        self.data_source = WeightedDataSource(
+            self.data_source._orig_items,
+            weights=self.weights,
+            num_samples=self.num_samples,
+            seed=self.seed + self.epoch,
+        )
+        self.data_source.fast_forward(
+            num_consumed
+            if num_consumed is not None
+            else self.diagnostics.current_epoch_stats.total_cuts
+        )
 
     def __iter__(self) -> "WeightedSimpleCutSampler":
         """
-        Prepare the dataset for iterating over a new epoch. Will shuffle the data if requested.
+        Prepare the weighted sample for the current epoch.
         """
         # Restored state with load_state_dict()? Skip resetting only this once.
         if self._just_restored_state:
@@ -143,5 +154,6 @@ class WeightedSimpleCutSampler(SimpleCutSampler):
         # than are actually available per epoch would have broken the checkpoint restoration.
         self.diagnostics.reset_current_epoch()
         # Reset the state to the beginning of the epoch.
+        self.data_source.shuffle(self.seed + self.epoch)
         iter(self.data_source)
         return self
