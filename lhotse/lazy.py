@@ -1226,7 +1226,10 @@ class LazyShuffler(IteratorNode):
             yield sample
 
     def _steady_state_phase(self, source_iter):
-        while not self._source_exhausted:
+        # Even an exhausted source must be advanced once after restoration:
+        # generator-based sources consume their pending state on next(), not
+        # iter(). Leaving that state pending would skip the following epoch.
+        while True:
             sample = self._next_source_item(source_iter)
             if sample is None:
                 break

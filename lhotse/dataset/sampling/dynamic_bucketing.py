@@ -825,10 +825,11 @@ class DynamicBucketer:
 
     def __iter__(self) -> Generator[CutSet, None, None]:
         # Init: sample `buffer_size` cuts and assign them to the right buckets.
-        self.cuts_iter = iter(self.cuts)
+        cuts_iter = self.cuts_iter = iter(self.cuts)
 
         # Check if we need to restore from a saved state (O(1) path)
-        if self._saved_state is not None:
+        restored = self._saved_state is not None
+        if restored:
             state = self._restore_from_saved_state()
             self._selection_state = state
         else:
@@ -910,6 +911,13 @@ class DynamicBucketer:
 
             # Cleanup.
             self.cuts_iter = None
+
+        if restored:
+            # A restored source applies its saved position when it is first advanced.
+            # The restored buckets may have held everything this epoch still had to
+            # yield, in which case nothing advanced the source, and its saved position
+            # would be applied at the start of the next epoch instead.
+            next(cuts_iter, None)
 
     def _select_bucket(self, state: BucketSelectionState) -> Queue:
         if self.bucket_rng is None:
