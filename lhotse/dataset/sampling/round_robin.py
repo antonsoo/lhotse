@@ -127,6 +127,9 @@ class RoundRobinSampler(CutSampler):
                 "randomize": self.randomize,
                 "_cur_sampler_idx": self._cur_sampler_idx,
                 "_num_dl_workers": self._num_dl_workers,
+                "rng_state": self.rng.bit_generator.state
+                if self.rng is not None
+                else None,
                 # Explicit list copy below allows to restore within the same process.
                 "_nondepleted_samplers_indices": list(
                     self._nondepleted_samplers_indices
@@ -157,6 +160,7 @@ class RoundRobinSampler(CutSampler):
         self.randomize = state_dict.pop("randomize")
         self._cur_sampler_idx = state_dict.pop("_cur_sampler_idx")
         self._num_dl_workers = state_dict.pop("_num_dl_workers")
+        rng_state = state_dict.pop("rng_state", None)
         self._nondepleted_samplers_indices = state_dict.pop(
             "_nondepleted_samplers_indices"
         )
@@ -167,9 +171,14 @@ class RoundRobinSampler(CutSampler):
         for sampler, sampler_sd in zip(self.samplers, state_dict.pop("samplers")):
             sampler.load_state_dict(sampler_sd)
         super().load_state_dict(state_dict)
+        self.rng = None
+        if rng_state is not None:
+            self.rng = np.random.default_rng(seed=self.seed + self.epoch)
+            self.rng.bit_generator.state = rng_state
 
     def __iter__(self):
-        self.rng = np.random.default_rng(seed=self.seed + self.epoch)
+        if self.rng is None or not self._just_restored_state:
+            self.rng = np.random.default_rng(seed=self.seed + self.epoch)
         for sampler in self.samplers:
             iter(sampler)
         if self._just_restored_state:
