@@ -306,7 +306,7 @@ class CutSampler(Sampler, Dillable):
         # it will be consumed by the subclass's load_state_dict / _fast_forward.
         self._cuts_state = state_dict.pop("cuts_state", None)
         # transforms_state is optionally captured for stateful augmentation transforms.
-        # It will be consumed by _fast_forward when using the indexed restore path.
+        # Replaying samplers apply it after fast-forwarding; others apply it below.
         self._transforms_state = state_dict.pop("transforms_state", None)
         assert (
             len(state_dict) == 0
@@ -314,6 +314,8 @@ class CutSampler(Sampler, Dillable):
             state_dict.keys()
         )
         self._just_restored_state = True
+        if not getattr(self, "_needs_fast_forward", False):
+            self._restore_transforms_state()
 
     def __iter__(self):
         raise NotImplementedError(
@@ -359,9 +361,8 @@ class CutSampler(Sampler, Dillable):
         """
         Restore stateful transform RNG states from a previously saved checkpoint.
 
-        Called by the indexed O(1) restore path in ``_fast_forward()``.
-        When using the O(N) fast-forward fallback, transforms advance naturally
-        and this method should NOT be called.
+        Samplers that replay batches call this after fast-forwarding. Replaying
+        only the current epoch cannot recover RNG state from earlier epochs.
         """
         transforms_state = getattr(self, "_transforms_state", None)
         if transforms_state is None:

@@ -284,10 +284,10 @@ class DynamicBucketingSampler(CutSampler):
         # O(1) indexed restore keys (optional, consumed by _fast_forward)
         self._rng_state = sd.pop("rng_state", None)
         self._bucketer_state = sd.pop("bucketer_state", None)
-        super().load_state_dict(sd)
         # Defer _fast_forward to __iter__ so the sampler remains picklable
         # for DataLoader with num_workers > 0.
         self._needs_fast_forward = True
+        super().load_state_dict(sd)
 
     def _fast_forward(self):
         current_epoch = self.diagnostics.current_epoch

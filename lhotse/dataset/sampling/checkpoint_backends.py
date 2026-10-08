@@ -131,12 +131,16 @@ def _build_replay_backend(
             epoch=current_epoch
         )
 
+    def _finish_restore() -> None:
+        sampler._restore_transforms_state()
+        sampler._just_restored_state = True
+
     return ReplayCheckpointBackend(
         num_steps=num_batches_to_iter,
         reset_for_replay_fn=_reset_diagnostics_for_replay,
         initialize_iterator_fn=sampler._initialize_replay_iterator,
         replay_step_fn=sampler._replay_step,
-        post_restore_fn=lambda: setattr(sampler, "_just_restored_state", True),
+        post_restore_fn=_finish_restore,
     )
 
 

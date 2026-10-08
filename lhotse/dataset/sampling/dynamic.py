@@ -172,10 +172,10 @@ class DynamicCutSampler(CutSampler):
         self.shuffle_buffer_size = sd.pop("shuffle_buffer_size")
         self.quadratic_duration = sd.pop("quadratic_duration")
         sd.pop("strict", None)  # backward compatibility
-        super().load_state_dict(sd)
         # Defer _fast_forward to __iter__ so the sampler remains picklable
         # for DataLoader with num_workers > 0.
         self._needs_fast_forward = True
+        super().load_state_dict(sd)
 
     def _fast_forward(self):
         current_epoch = self.diagnostics.current_epoch
