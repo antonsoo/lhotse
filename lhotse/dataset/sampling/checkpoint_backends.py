@@ -109,6 +109,19 @@ def build_dynamic_cut_checkpoint_backend(
     )
 
     if _all_sources_graph_restorable(sampler):
+        if num_batches_to_iter == 0:
+            # No batch of this epoch was yielded yet, so the sources have not been
+            # advanced in it. Their state describes where the previous pass left
+            # them (or sources that were never wrapped for an epoch at all), and
+            # restoring it would look like an exhausted iterator.
+            return IndexedCheckpointBackend(
+                has_required_state=True,
+                restore_fn=lambda: _restore_dynamic_cut_pre_yield(sampler),
+                missing_state_message="",
+                failure_message=_indexed_restore_failure_message(
+                    "O(1) indexed restore (pre-yield) failed"
+                ),
+            )
         return IndexedCheckpointBackend(
             has_required_state=has_state,
             restore_fn=lambda: _restore_dynamic_cut_indexed(sampler, cuts_state),
@@ -147,6 +160,15 @@ def _restore_dynamic_cut_indexed(sampler: Any, cuts_state: list) -> None:
     sampler._cuts_state = None
     sampler._skip_diagnostics_reset_once = True
     sampler._initialize_epoch_iterator(rebuild_sources=False)
+    sampler._restore_transforms_state()
+    sampler._just_restored_state = True
+
+
+def _restore_dynamic_cut_pre_yield(sampler: Any) -> None:
+    sampler._just_restored_state = False
+    sampler._cuts_state = None
+    sampler._skip_diagnostics_reset_once = True
+    sampler._initialize_epoch_iterator(rebuild_sources=True)
     sampler._restore_transforms_state()
     sampler._just_restored_state = True
 

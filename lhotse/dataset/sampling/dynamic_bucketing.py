@@ -227,12 +227,14 @@ class DynamicBucketingSampler(CutSampler):
         # Capture bucketer state for O(1) indexed restore.
         # We only save bucketer internals after its iterator loop has started;
         # before that, buckets are uninitialized and restoring them would
-        # incorrectly look like an exhausted iterator.
+        # incorrectly look like an exhausted iterator. The same holds for a
+        # bucketer left over from another epoch after set_epoch().
         bucketer = getattr(self, "_bucketer", None)
         if (
             bucketer is not None
             and self.rng is not None
             and getattr(bucketer, "_selection_state", None) is not None
+            and getattr(self, "_bucketer_epoch", self.epoch) == self.epoch
         ):
             try:
                 bucketer_state = bucketer.get_state(compact=self.compact_state)
@@ -370,6 +372,7 @@ class DynamicBucketingSampler(CutSampler):
             diagnostics=self.diagnostics,
             restore_sources=restore_sources,
         )
+        self._bucketer_epoch = self.epoch
         self.cuts_iter = iter(self._bucketer)
         return self
 

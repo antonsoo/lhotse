@@ -367,3 +367,48 @@ def test_load_state_dict_same_rank_still_works():
     src = SimpleCutSampler(CUTS, max_duration=10.0, world_size=4, rank=2)
     dst = SimpleCutSampler(CUTS, max_duration=10.0, world_size=4, rank=2)
     dst.load_state_dict(src.state_dict())  # no raise
+
+
+@pytest.mark.parametrize(
+    "sampler_type", [DynamicCutSampler, DynamicBucketingSampler], ids=["cut", "bucket"]
+)
+@pytest.mark.parametrize("shuffle", [False, True])
+@pytest.mark.parametrize("finished_epochs", [0, 1])
+@pytest.mark.parametrize("call_iter", [False, True])
+def test_restore_indexed_sampler_state_saved_before_first_batch(
+    tmp_path, sampler_type, shuffle, finished_epochs, call_iter
+):
+    """
+    A state saved before the first batch of an epoch has to restore to the start of
+    that epoch. The sources have not been advanced in it yet, so their own state is
+    whatever the previous epoch left behind.
+    """
+    path = tmp_path / "cuts.jsonl"
+    DummyManifest(CutSet, begin_id=0, end_id=40).to_file(path)
+
+    def make_sampler():
+        kwargs = {"num_buckets": 2} if sampler_type is DynamicBucketingSampler else {}
+        return sampler_type(
+            CutSet.from_file(path, indexed=True),
+            max_cuts=4,
+            shuffle=shuffle,
+            seed=0,
+            **kwargs,
+        )
+
+    sampler, reference = make_sampler(), make_sampler()
+    for epoch in range(finished_epochs):
+        for s in (sampler, reference):
+            s.set_epoch(epoch)
+            assert len(list(s)) == 10
+    sampler.set_epoch(finished_epochs)
+    reference.set_epoch(finished_epochs)
+    if call_iter:
+        iter(sampler)
+    state = deepcopy(sampler.state_dict())
+
+    restored = make_sampler()
+    restored.load_state_dict(state)
+    expected = list(reference)
+    assert len(expected) == 10
+    assert list(restored) == expected
