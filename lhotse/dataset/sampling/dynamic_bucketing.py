@@ -255,6 +255,19 @@ class DynamicBucketingSampler(CutSampler):
         if "rng_state" not in sd and "bucketer_state" not in sd:
             pending_rng_state = getattr(self, "_rng_state", None)
             pending_bucketer_state = getattr(self, "_bucketer_state", None)
+            if (
+                pending_bucketer_state is None
+                and bucketer is not None
+                and bucketer._saved_state is not None
+            ):
+                # _fast_forward has run and handed the payload to the bucketer,
+                # which applies it on its first next().
+                from lhotse.checkpoint import _rng_state_from_json
+
+                pending_bucketer_state = bucketer._saved_state
+                pending_rng_state = _rng_state_from_json(
+                    pending_bucketer_state["rng_state"]
+                )
             if pending_rng_state is not None and pending_bucketer_state is not None:
                 sd["rng_state"] = pending_rng_state
                 sd["bucketer_state"] = dict(pending_bucketer_state)
