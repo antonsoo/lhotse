@@ -4174,6 +4174,9 @@ class LazyCutMixer(IteratorNode):
             self.duration if self.duration is not None else cut.duration - 0.05,
             ndigits=8,
         )
+        if target_mixed_duration <= 0:
+            # The cut is not longer than that margin, so there is nothing left to aim for.
+            target_mixed_duration = cut.duration
         # Actual mixing
         to_mix = self._next_mix_in_cut(rng)
         to_mix = self._maybe_truncate_cut(to_mix, target_mixed_duration, rng)

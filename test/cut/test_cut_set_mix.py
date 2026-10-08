@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from lhotse.cut import CutSet, MixedCut
-from lhotse.testing.dummies import DummyManifest, as_lazy
+from lhotse.testing.dummies import DummyManifest, as_lazy, dummy_cut
 from lhotse.testing.fixtures import random_cut_set
 
 
@@ -92,3 +92,17 @@ def test_cut_set_mixing_with_tag():
         assert len(cut.tracks) > 2
         assert cut.tracks[0].tag is None
         assert all(track.tag == "noise" for track in cut.tracks[1:])
+
+
+@pytest.mark.parametrize("duration", [0.06, 0.05, 0.04, 0.01])
+@pytest.mark.parametrize("random_mix_offset", [False, True])
+def test_cut_set_mixing_into_very_short_cuts(duration, random_mix_offset):
+    # Cuts that are not longer than the 50ms margin used when choosing how much
+    # noise to mix in: https://github.com/lhotse-speech/lhotse/issues/1448
+    speech_cuts = CutSet.from_cuts([dummy_cut(0, duration=duration)])
+    noise_cuts = CutSet.from_cuts([dummy_cut(100, duration=5.0)])
+    mixed_cuts = speech_cuts.mix(noise_cuts, random_mix_offset=random_mix_offset)
+    (mixed,) = mixed_cuts
+    assert isinstance(mixed, MixedCut)
+    assert mixed.duration == duration
+    assert all(track.cut.duration > 0 for track in mixed.tracks)
