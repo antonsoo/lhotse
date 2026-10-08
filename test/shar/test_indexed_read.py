@@ -424,6 +424,46 @@ def test_indexed_shar_state_dict_restore_cross_shard(tmp_path, cuts):
     assert first_k + remaining == all_items
 
 
+@pytest.mark.parametrize("pass_ended", [True, False])
+def test_indexed_shar_restored_finished_pass_is_not_counted_again(
+    tmp_path, cuts, pass_ended
+):
+    """
+    A state saved after the last item restores to an empty remainder. Whether
+    the pass had ended (``epoch`` already incremented) or was still suspended at
+    its last item, the next pass must get the same ``shar_epoch`` as in an
+    uninterrupted run.
+    """
+    writer = SharWriter(
+        tmp_path,
+        fields=ALL_FIELDS,
+        shard_size=10,
+        compress_jsonl=False,
+        create_index=True,
+    )
+    with writer:
+        for c in cuts:
+            writer.write(c)
+
+    it1 = LazyIndexedSharIterator(in_dir=tmp_path)
+    gen1 = iter(it1)
+    for _ in range(20):
+        next(gen1)
+    if pass_ended:
+        assert list(gen1) == []
+    sd = it1.state_dict()
+    assert sd["position"] == 20
+    assert sd["epoch"] == (1 if pass_ended else 0)
+    assert list(gen1) == []
+
+    it2 = LazyIndexedSharIterator(in_dir=tmp_path)
+    it2.load_state_dict(sd)
+    assert list(it2) == []
+    assert it2.epoch == it1.epoch == 1
+    assert it2.state_dict() == it1.state_dict()
+    assert {c.shar_epoch for c in it2} == {c.shar_epoch for c in it1} == {1}
+
+
 # ---------------------------------------------------------------------------
 # LazyIndexedSharIterator: shuffle and __len__
 # ---------------------------------------------------------------------------

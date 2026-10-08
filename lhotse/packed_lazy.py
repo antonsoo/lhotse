@@ -149,6 +149,9 @@ class LazyPackedManifestIterator(IteratorNode):
         self._current_position = 0
         self._global_position = 0
         self._global_seed = None
+        # Whether the last shuffled pass ran to its end, i.e. is already counted
+        # in ``num_iters``.
+        self._global_finished = False
         self._shard_id = None
         self._num_shards = None
         self._restored = False
@@ -217,6 +220,7 @@ class LazyPackedManifestIterator(IteratorNode):
             "global_seed": self._global_seed,
             "global_shard_id": self._shard_id,
             "global_num_shards": self._num_shards,
+            "global_finished": self._global_finished,
             "packed_current_position": self._current_position,
         }
 
@@ -234,6 +238,7 @@ class LazyPackedManifestIterator(IteratorNode):
         self._global_seed = state.get("global_seed")
         self._shard_id = state.get("global_shard_id")
         self._num_shards = state.get("global_num_shards")
+        self._global_finished = state.get("global_finished", False)
         self._restored = True
 
     def close(self) -> None:
@@ -296,6 +301,9 @@ class LazyPackedManifestIterator(IteratorNode):
         if self._restored:
             self._restored = False
             start = self._global_position
+            # A pass that had already ended when the state was saved is restored
+            # at its end and yields nothing. It was counted before the save.
+            counted = self._global_finished
             base_seed = self._global_seed
             if base_seed is None:
                 base_seed = resolve_iteration_seed(self.seed)
@@ -309,9 +317,11 @@ class LazyPackedManifestIterator(IteratorNode):
                 )
         else:
             start = 0
+            counted = False
             self._global_position = 0
             base_seed = resolve_iteration_seed(self.seed)
             self._global_seed = base_seed
+        self._global_finished = counted
         self._shard_id = shard_id
         self._num_shards = num_shards
 
@@ -327,7 +337,9 @@ class LazyPackedManifestIterator(IteratorNode):
             item = self._decode_or_skip(token)
             if item is not None:
                 yield item
-        self.num_iters += 1
+        if not counted:
+            self.num_iters += 1
+        self._global_finished = True
 
     def _iter_sequential(self):
         from lhotse.dataset.dataloading import get_worker_partition

@@ -696,6 +696,8 @@ class LazyIteratorChain(IteratorNode):
         # Iteration tracking (globally-shuffled path)
         self._global_position = 0
         self._global_seed = None
+        # Whether the last pass ran to its end, i.e. is already counted in ``num_iters``.
+        self._global_finished = False
 
     @property
     def is_indexed(self) -> bool:
@@ -791,6 +793,9 @@ class LazyIteratorChain(IteratorNode):
         if self._restored:
             self._restored = False
             start = self._global_position
+            # A pass that had already ended when the state was saved is restored
+            # at its end and yields nothing. It was counted before the save.
+            counted = self._global_finished
             base_seed = self._global_seed
             if base_seed is None:
                 base_seed = resolve_iteration_seed(self.seed)
@@ -807,9 +812,11 @@ class LazyIteratorChain(IteratorNode):
                 )
         else:
             start = 0
+            counted = False
             self._global_position = 0
             base_seed = resolve_iteration_seed(self.seed)
             self._global_seed = base_seed
+        self._global_finished = counted
         self._global_shard_id = shard_id
         self._global_num_shards = num_shards
 
@@ -823,7 +830,9 @@ class LazyIteratorChain(IteratorNode):
         for i in range(start, shard_len):
             self._global_position = i + 1
             yield self[shuffled[i]]
-        self.num_iters += 1
+        if not counted:
+            self.num_iters += 1
+        self._global_finished = True
 
     def __len__(self) -> int:
         return sum(len(it) for it in self.sources)
@@ -840,6 +849,7 @@ class LazyIteratorChain(IteratorNode):
             "global_seed": getattr(self, "_global_seed", None),
             "global_shard_id": getattr(self, "_global_shard_id", None),
             "global_num_shards": getattr(self, "_global_num_shards", None),
+            "global_finished": self._global_finished,
         }
         # Save inner states for stateful children
         inner_states = []
@@ -856,6 +866,7 @@ class LazyIteratorChain(IteratorNode):
         self._global_seed = sd.get("global_seed")
         self._global_shard_id = sd.get("global_shard_id")
         self._global_num_shards = sd.get("global_num_shards")
+        self._global_finished = sd.get("global_finished", False)
         if self.shuffle_iters and self.is_indexed:
             # Globally-shuffled path: position + num_iters (+ stored per-epoch
             # resolved seed) are enough to reconstruct permutation deterministically.

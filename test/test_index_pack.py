@@ -975,6 +975,50 @@ def test_lazy_packed_manifest_restores_global_shuffle(tmp_path):
     assert [item["id"] for item in restored] == expected
 
 
+@pytest.mark.parametrize("pass_ended", [True, False])
+def test_lazy_packed_manifest_restored_finished_pass_is_not_counted_again(
+    tmp_path, pass_ended
+):
+    paths = [tmp_path / "shard-0.jsonl", tmp_path / "shard-1.jsonl"]
+    for shard, path in enumerate(paths):
+        _write_jsonl(path, [{"id": f"{shard}-{idx}"} for idx in range(20)])
+        create_jsonl_index(path)
+    spec = IndexPackCollectionSpec(
+        role="manifest",
+        kind="jsonl",
+        source_spec="two-shards",
+        paths=tuple(map(str, paths)),
+    )
+    pack_path = tmp_path / "dataset.idxpack"
+    write_index_pack(pack_path, [spec])
+
+    def make_source():
+        return LazyPackedManifestIterator(
+            pack_path,
+            spec.key,
+            shuffle_shards=True,
+            seed=17,
+            decode=GraphOriginDict,
+        )
+
+    reference = make_source()
+    first_pass = [item["id"] for item in reference]
+    second_pass = [item["id"] for item in reference]
+    assert sorted(first_pass) == sorted(second_pass) and first_pass != second_pass
+
+    source = make_source()
+    iterator = iter(source)
+    assert [next(iterator)["id"] for _ in range(40)] == first_pass
+    if pass_ended:
+        assert list(iterator) == []
+    state = source.state_dict()
+
+    restored = make_source()
+    restored.load_state_dict(state)
+    assert list(restored) == []
+    assert [item["id"] for item in restored] == second_pass
+
+
 def test_lazy_packed_manifest_restores_sequential_iteration(tmp_path):
     paths = [tmp_path / "shard-0.jsonl", tmp_path / "shard-1.jsonl"]
     for shard, path in enumerate(paths):

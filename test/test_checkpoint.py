@@ -14,7 +14,9 @@ from lhotse.checkpoint import (
     restore_state_dict,
 )
 from lhotse.lazy import (
+    GraphOriginDict,
     LazyFilter,
+    LazyIndexedManifestIterator,
     LazyIteratorChain,
     LazyIteratorMultiplexer,
     LazyJsonlIterator,
@@ -375,3 +377,41 @@ def test_cutset_state_dict_eager_raises():
         cuts.state_dict()
     with pytest.raises(RuntimeError, match="lazy"):
         cuts.load_state_dict({})
+
+
+@pytest.mark.parametrize("pass_ended", [True, False])
+def test_restored_finished_pass_of_shuffled_chain_is_not_counted_again(
+    tmp_path, pass_ended
+):
+    """
+    A globally shuffled chain restored from a state saved after its last item has
+    nothing left to yield. The pass after it must use the same permutation as in
+    an uninterrupted run, whether or not the saved pass had already ended.
+    """
+    p1 = _make_jsonl(tmp_path, n=7, name="a.jsonl")
+    p2 = _make_jsonl(tmp_path, n=5, name="b.jsonl")
+
+    def make_chain():
+        return LazyIteratorChain(
+            LazyIndexedManifestIterator(p1, decode=GraphOriginDict),
+            LazyIndexedManifestIterator(p2, decode=GraphOriginDict),
+            shuffle_iters=True,
+            seed=0,
+        )
+
+    reference = make_chain()
+    first_pass = [item["id"] for item in reference]
+    second_pass = [item["id"] for item in reference]
+    assert sorted(first_pass) == sorted(second_pass) and first_pass != second_pass
+
+    chain = make_chain()
+    gen = iter(chain)
+    assert [next(gen)["id"] for _ in range(12)] == first_pass
+    if pass_ended:
+        assert list(gen) == []
+    sd = chain.state_dict()
+
+    restored = make_chain()
+    restored.load_state_dict(sd)
+    assert list(restored) == []
+    assert [item["id"] for item in restored] == second_pass

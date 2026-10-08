@@ -127,6 +127,9 @@ class LazyIndexedSharIterator(IteratorNode):
         self.split_for_dataloading = split_for_dataloading
         self._lazy = lazy
         self.epoch = 0
+        # Whether the last pass ran to its end, i.e. is already counted in ``epoch``.
+        self._pass_finished = False
+        self._restored_finished = False
         self._iter_state = PartitionedIndexedIterator(
             shuffle=self.shuffle,
             seed=resolve_seed(self.seed) if isinstance(self.seed, int) else 0,
@@ -394,14 +397,22 @@ class LazyIndexedSharIterator(IteratorNode):
         return cut
 
     def __iter__(self):
+        # A pass that had already ended when the state was saved is restored at
+        # its end and yields nothing. It was counted before the save.
+        counted = self._restored_finished
+        self._restored_finished = False
+        self._pass_finished = counted
         for global_idx in self._iter_state.iterate(self._total_len):
             yield self[global_idx]
-        self.epoch += 1
+        if not counted:
+            self.epoch += 1
+        self._pass_finished = True
 
     def state_dict(self) -> dict:
         return {
             **self._iter_state.state_dict(),
             "epoch": self.epoch,
+            "finished": self._pass_finished,
             "shuffle": self.shuffle,
             "seed": self.seed,
             "lazy": self._lazy,
@@ -410,6 +421,7 @@ class LazyIndexedSharIterator(IteratorNode):
     def load_state_dict(self, sd: dict) -> None:
         self._iter_state.load_state_dict(sd)
         self.epoch = sd.get("epoch", 0)
+        self._pass_finished = self._restored_finished = sd.get("finished", False)
         # Backward-compat: older state dicts may not carry "lazy".
         if "lazy" in sd:
             self._lazy = bool(sd["lazy"])
