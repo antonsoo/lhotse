@@ -192,14 +192,18 @@ package, ``pip install torchdata``). It is a drop-in replacement for
         DynamicCutSampler,
         IterableDatasetWrapper,
     )
+    from lhotse.dataset.dataloading import make_worker_init_fn
 
-    cuts = CutSet.from_shar(in_dir="data/")
+    cuts = CutSet.from_shar(in_dir="data/", split_for_dataloading=True)
     dataset = K2SpeechRecognitionDataset()
     sampler = DynamicCutSampler(cuts, max_duration=200, shuffle=True)
     iter_dset = IterableDatasetWrapper(dataset, sampler)
+    worker_init_fn = make_worker_init_fn(rank=0, world_size=1)
 
     # Use StatefulDataLoader instead of regular DataLoader
-    dloader = StatefulDataLoader(iter_dset, batch_size=None, num_workers=2)
+    dloader = StatefulDataLoader(
+        iter_dset, batch_size=None, num_workers=2, worker_init_fn=worker_init_fn
+    )
 
     # Training loop with checkpointing
     for batch in dloader:
@@ -216,10 +220,18 @@ package, ``pip install torchdata``). It is a drop-in replacement for
     ckpt = torch.load("checkpoint.pt")
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
-    dloader = StatefulDataLoader(iter_dset, batch_size=None, num_workers=2)
+    dloader = StatefulDataLoader(
+        iter_dset, batch_size=None, num_workers=2, worker_init_fn=worker_init_fn
+    )
     dloader.load_state_dict(ckpt["dataloader"])
     for batch in dloader:  # continues exactly where we left off
         train_step(batch)
+
+``split_for_dataloading=True`` splits streaming Shar shards across workers.
+For indexed Shar, ``make_worker_init_fn`` enables partitioning of the cut indices;
+without it, each worker reads the entire dataset. The example above uses one
+training process. For distributed training, pass the actual rank and world size
+to ``make_worker_init_fn`` in each process, and keep the same settings when resuming.
 
 Requirements and limitations
 ****************************
