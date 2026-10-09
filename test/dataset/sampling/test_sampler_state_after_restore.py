@@ -36,8 +36,9 @@ def remaining(sampler_iter):
 @pytest.mark.parametrize("shuffle", [False, True])
 @pytest.mark.parametrize("call_iter", [False, True])
 @pytest.mark.parametrize("with_transform", [False, True])
+@pytest.mark.parametrize("reuse", [False, True])
 def test_indexed_sampler_state_saved_right_after_restore(
-    tmp_path, sampler_type, shuffle, call_iter, with_transform
+    tmp_path, sampler_type, shuffle, call_iter, with_transform, reuse
 ):
     path = tmp_path / "cuts.jsonl"
     DummyManifest(CutSet, begin_id=0, end_id=40).to_file(path)
@@ -66,6 +67,10 @@ def test_indexed_sampler_state_saved_right_after_restore(
     assert len(expected) == 7
 
     restored = make_sampler()
+    if reuse:
+        restored_iter = iter(restored)
+        next(restored_iter)
+        next(restored_iter)
     restored.load_state_dict(first_state)
     if call_iter:
         iter(restored)
