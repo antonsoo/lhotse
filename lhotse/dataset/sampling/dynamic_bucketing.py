@@ -297,7 +297,9 @@ class DynamicBucketingSampler(CutSampler):
         # O(1) indexed restore keys (optional, consumed by _fast_forward)
         self._rng_state = sd.pop("rng_state", None)
         self._bucketer_state = sd.pop("bucketer_state", None)
-        # Do not let a previous iterator overwrite the pending checkpoint on save.
+        # Discard the previous iterator so it cannot overwrite the pending state
+        # on save or prevent pickling the sampler for spawned DataLoader workers.
+        self.cuts_iter = None
         self._bucketer = None
         super().load_state_dict(sd)
         # Defer _fast_forward to __iter__ so the sampler remains picklable
